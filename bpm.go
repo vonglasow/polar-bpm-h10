@@ -6,10 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+)
+
+var (
+	pushJobURL string
+	verbose    bool
 )
 
 func main() {
@@ -18,7 +22,6 @@ func main() {
 	var url string
 	var job string
 	var metric string
-	var verbose bool
 
 	// flags declaration using flag package
 	flag.StringVar(&mac, "b", "", "Bluetooth mac address used with gatttool to connect and parse data")
@@ -34,25 +37,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	pushJobURL := fmt.Sprintf("%s/metrics/job/%s", url, job)
+	pushJobURL = fmt.Sprintf("%s/metrics/job/%s", url, job)
 
 	if verbose {
-		log.Println(pushJobURL)
+		log.Println("Will push to:", pushJobURL)
 	}
 
 	//gatttool -t random -b 01:AB:CD:EF:02:03 --char-write-req --handle=0x0011 --value=0100 --listen
 	command := fmt.Sprintf("gatttool -t random -b %s --char-write-req --handle=0x0011 --value=0100 --listen", mac)
 	if verbose {
-		log.Println(command)
+		log.Println("Fetch command:", command)
 	}
-
 	cmd := exec.Command(command)
-
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Fatal(err)
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -77,14 +80,9 @@ func main() {
 				log.Println(pushJobURL)
 			}
 			//echo "some_metric 4.16" | curl --data-binary @- http://192.168.1.2:9091/metrics/job/some_job
-			resp, err := http.Post(pushJobURL, "application/x-www-form-urlencoded", metricReader)
-			if err != nil {
+			if err := httpPush(metricReader); err != nil {
 				log.Fatal(err)
 			}
-			if verbose {
-				log.Println(resp.Status)
-			}
-			resp.Body.Close()
 		}
 	}
 

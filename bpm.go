@@ -1,15 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/exec"
-	"bufio"
-	"log"
 	"strings"
-	"encoding/hex"
-	"net/http"
 )
 
 func main() {
@@ -27,66 +27,68 @@ func main() {
 	flag.StringVar(&metric, "m", "bpm", "Specify prometheus metric.")
 	flag.BoolVar(&verbose, "v", false, "verbose")
 
-	flag.Parse()  // after declaring flags we need to call it
+	flag.Parse() // after declaring flags we need to call it
 
 	if mac == "" || url == "" {
 		flag.Usage()
-		os.Exit(0)
+		os.Exit(1)
 	}
 
+	pushJobURL := fmt.Sprintf("%s/metrics/job/%s", url, job)
+
 	if verbose {
-		fmt.Print(url, "/metrics/job/", job, "\n")
+		log.Println(pushJobURL)
 	}
 
 	//gatttool -t random -b 01:AB:CD:EF:02:03 --char-write-req --handle=0x0011 --value=0100 --listen
+	command := fmt.Sprintf("gatttool -t random -b %s --char-write-req --handle=0x0011 --value=0100 --listen", mac)
 	if verbose {
-		fmt.Println("gatttool -t random -b", mac, "--char-write-req --handle=0x0011 --value=0100 --listen")
+		log.Println(command)
 	}
 
-	cmd := exec.Command("/usr/bin/gatttool", "-t", "random", "-b", mac, "--char-write-req", "--handle=0x0011", "--value=0100", "--listen")
+	cmd := exec.Command(command)
 
-	stdout, _ := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
 	cmd.Start()
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		raw_text := scanner.Text()
-		s := strings.SplitAfter(raw_text, ": ")
+		rawText := scanner.Text()
+		s := strings.SplitAfter(rawText, ": ")
 		if len(s) > 1 {
 			n := strings.Fields(s[len(s)-1])
 			bpm, err := hex.DecodeString(n[1])
 			if err != nil {
 				log.Println(err)
+				continue
 			}
 
 			// display logs
 			if verbose {
-				fmt.Println(int(bpm[0]))
+				log.Println(int(bpm[0]))
 			}
 
-			metric_str := strings.NewReader(fmt.Sprintln(metric, int(bpm[0])))
+			metricReader := strings.NewReader(fmt.Sprintf("%s %d\n", metric, int(bpm[0])))
 
 			if verbose {
-				fmt.Print(url, "/metrics/job/", job, "\n")
+				log.Println(pushJobURL)
 			}
 			//echo "some_metric 4.16" | curl --data-binary @- http://192.168.1.2:9091/metrics/job/some_job
-			req, err := http.NewRequest("POST", fmt.Sprintf("%s/metrics/job/%s", url, job), metric_str)
+			resp, err := http.Post(pushJobURL, "application/x-www-form-urlencoded", metricReader)
 			if err != nil {
-				panic(err)
-			}
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
 			if verbose {
-				fmt.Println(resp.Status)
+				log.Println(resp.Status)
 			}
-			defer resp.Body.Close()
+			resp.Body.Close()
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-			log.Println(err)
+		log.Println(err)
 	}
 }

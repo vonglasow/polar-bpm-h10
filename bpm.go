@@ -48,7 +48,8 @@ func main() {
 	if verbose {
 		log.Println("Fetch command:", command)
 	}
-	cmd := exec.Command(command)
+	commandSplitted := strings.Fields(command)
+	cmd := exec.Command(commandSplitted[0], commandSplitted[1:]...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)

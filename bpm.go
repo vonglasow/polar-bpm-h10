@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
-	"bufio"
-	"log"
 	"strings"
-	"encoding/hex"
-	"net/http"
+)
+
+var (
+	pushJobURL string
+	verbose    bool
 )
 
 func main() {
@@ -18,7 +22,6 @@ func main() {
 	var url string
 	var job string
 	var metric string
-	var verbose bool
 
 	// flags declaration using flag package
 	flag.StringVar(&mac, "b", "", "Bluetooth mac address used with gatttool to connect and parse data")
@@ -27,66 +30,64 @@ func main() {
 	flag.StringVar(&metric, "m", "bpm", "Specify prometheus metric.")
 	flag.BoolVar(&verbose, "v", false, "verbose")
 
-	flag.Parse()  // after declaring flags we need to call it
+	flag.Parse() // after declaring flags we need to call it
 
 	if mac == "" || url == "" {
 		flag.Usage()
-		os.Exit(0)
+		os.Exit(1)
 	}
 
+	pushJobURL = fmt.Sprintf("%s/metrics/job/%s", url, job)
+
 	if verbose {
-		fmt.Print(url, "/metrics/job/", job, "\n")
+		log.Println("Will push to:", pushJobURL)
 	}
 
 	//gatttool -t random -b 01:AB:CD:EF:02:03 --char-write-req --handle=0x0011 --value=0100 --listen
+	command := fmt.Sprintf("gatttool -t random -b %s --char-write-req --handle=0x0011 --value=0100 --listen", mac)
 	if verbose {
-		fmt.Println("gatttool -t random -b", mac, "--char-write-req --handle=0x0011 --value=0100 --listen")
+		log.Println("Fetch command:", command)
 	}
-
-	cmd := exec.Command("/usr/bin/gatttool", "-t", "random", "-b", mac, "--char-write-req", "--handle=0x0011", "--value=0100", "--listen")
-
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Start()
+	commandSplitted := strings.Fields(command)
+	cmd := exec.Command(commandSplitted[0], commandSplitted[1:]...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Fatal(err)
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		raw_text := scanner.Text()
-		s := strings.SplitAfter(raw_text, ": ")
+		rawText := scanner.Text()
+		s := strings.SplitAfter(rawText, ": ")
 		if len(s) > 1 {
 			n := strings.Fields(s[len(s)-1])
 			bpm, err := hex.DecodeString(n[1])
 			if err != nil {
 				log.Println(err)
+				continue
 			}
 
 			// display logs
 			if verbose {
-				fmt.Println(int(bpm[0]))
+				log.Println(int(bpm[0]))
 			}
 
-			metric_str := strings.NewReader(fmt.Sprintln(metric, int(bpm[0])))
+			metricReader := strings.NewReader(fmt.Sprintf("%s %d\n", metric, int(bpm[0])))
 
 			if verbose {
-				fmt.Print(url, "/metrics/job/", job, "\n")
+				log.Println(pushJobURL)
 			}
 			//echo "some_metric 4.16" | curl --data-binary @- http://192.168.1.2:9091/metrics/job/some_job
-			req, err := http.NewRequest("POST", fmt.Sprintf("%s/metrics/job/%s", url, job), metric_str)
-			if err != nil {
-				panic(err)
+			if err := httpPush(metricReader); err != nil {
+				log.Fatal(err)
 			}
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				panic(err)
-			}
-			if verbose {
-				fmt.Println(resp.Status)
-			}
-			defer resp.Body.Close()
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-			log.Println(err)
+		log.Println(err)
 	}
 }
